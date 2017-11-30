@@ -1,0 +1,150 @@
+#!/usr/bin/env python3
+import argparse
+from datetime import date
+import logging
+import os
+from pathlib import Path
+import re
+import shutil
+import subprocess
+import sys
+from tabulate import tabulate
+from typing import List
+
+
+TODAY_DIR = Path.home() / '.today'
+
+
+LOG = logging.getLogger(__name__)
+LOG.setLevel('INFO')
+formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+ch = logging.StreamHandler()
+ch.setFormatter(formatter)
+LOG.handlers = []
+LOG.addHandler(ch)
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description=(
+            'Live a semi-organized life by keeping a running tab of things'
+            "you've done and things you need/want to do."
+        ),
+    )
+    parser.add_argument(
+        '--verbose', '-v',
+        action='store_true',
+        help='Increase output',
+    )
+    parser.add_argument(
+        '--today-dir',
+        type=Path,
+        default=TODAY_DIR,
+        help=(
+            'Override directory to store notes (default is '
+            '%(default)s)'
+        ),
+    )
+    subparsers = parser.add_subparsers(dest='cmd')
+
+    open_parser = subparsers.add_parser(
+        'open',
+        help='Open notes for today',
+    )
+    open_parser.set_defaults(cmd=cmd_open)
+
+    list_parser = subparsers.add_parser(
+        'list',
+        aliases=['ls'],
+        help='List all days with notes',
+    )
+    list_parser.set_defaults(cmd=cmd_list)
+
+    return parser.parse_args()
+
+
+def get_valid_notes_files(today_dir: Path) -> List[Path]:
+    """
+    Read user's today directory and return all valid notes files, sorted by
+    date
+    """
+    possibles = []
+    for possible in today_dir.glob('notes_*.txt'):
+        possible_date = possible.stem.split('_')[1]
+        if re.match('\d{4}-\d{2}-\d{2}', possible_date) is None:
+            LOG.debug('Ignoring invalid notes file {}'.format(possible))
+            continue
+        possibles.append(possible)
+    return sorted(possibles)
+
+
+def cmd_open(args: argparse.Namespace) -> bool:
+    """
+    Open the notes file for today. If one doesn't exist, copy it from the most
+    recent notes file. If none exist, create one from scratch.
+    """
+    day = date.today()
+    day_notes = args.today_dir / 'notes_{}.txt'.format(day)
+
+    if not day_notes.exists():
+        # Create it from the last relevant day, if one exists
+        LOG.debug('Day does not exist, copying from earlier day')
+        dates = []
+        for possible in get_valid_notes_files(args.today_dir):
+            dates.append(possible.stem.split('_')[1])
+
+        if dates:
+            candidate = args.today_dir / 'notes_{}.txt'.format(dates[-1])
+            LOG.debug('Copying from previous notes {}'.format(candidate))
+            shutil.copyfile(candidate, day_notes)
+        else:
+            LOG.debug('No valid previous notes, starting new notes')
+
+    editor = os.environ.get('EDITOR', 'vim')
+    proc = subprocess.run([editor, day_notes])
+
+    return proc.returncode == 0
+
+
+def cmd_list(args: argparse.Namespace) -> bool:
+    """
+    List all existing notes files along with their line count
+    """
+    rows = []
+    for note in get_valid_notes_files(args.today_dir):
+        with note.open('r') as f:
+            lines = len(f.readlines())
+        date = note.stem.split('_')[1]
+        rows.append([date, lines])
+
+    print(tabulate(rows, headers=['date', 'lines']))
+
+    return True
+
+
+def main():
+    args = parse_args()
+
+    if args.verbose:
+        LOG.setLevel('DEBUG')
+
+    if not args.today_dir.exists():
+        LOG.debug('{} does not exist, creating'.format(args.today_dir))
+        args.today_dir.mkdir()
+
+    if not args.today_dir.is_dir():
+        LOG.error(
+            '{} is not a directory, cannot continue'.format(
+                args.today_dir,
+            ),
+        )
+        return False
+
+    if args.cmd is None:
+        return cmd_open(args)
+
+    return args.cmd(args)
+
+
+if __name__ == '__main__':
+    sys.exit(0 if main() else 1)
