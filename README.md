@@ -5,7 +5,7 @@
 ## Usage
 
     $ python setup.py install
-    $ ...
+    $ today
 
 ## Motivation
 
